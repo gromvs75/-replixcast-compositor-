@@ -6,8 +6,8 @@ let initialized = false;
 
 function initFirebase() {
   if (initialized) return;
-  const serviceAccountB64 = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-  if (!serviceAccountB64) throw new Error("FIREBASE_SERVICE_ACCOUNT_KEY env var is missing");
+  const serviceAccountB64 = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_B64;
+  if (!serviceAccountB64) throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON_B64 env var is missing");
   const serviceAccount = JSON.parse(Buffer.from(serviceAccountB64, "base64").toString("utf-8"));
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
