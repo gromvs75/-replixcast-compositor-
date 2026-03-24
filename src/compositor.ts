@@ -270,7 +270,7 @@ async function composeScene(
     else if (tl.align === "right") xExpr = `${tx}-text_w`;
 
     const hasTimeRange = typeof tl.startTime === "number" && typeof tl.endTime === "number";
-    const enableExpr = hasTimeRange ? `:enable='between(t,${tl.startTime.toFixed(3)},${tl.endTime.toFixed(3)})'` : "";
+    const enableExpr = hasTimeRange ? `:enable='between(t,${(tl.startTime as number).toFixed(3)},${(tl.endTime as number).toFixed(3)})'` : "";
 
     filters.push(
       `${lastVideo}drawtext=` +
