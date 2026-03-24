@@ -257,8 +257,13 @@ async function composeScene(
     const tx = Math.round(outW / 2 + (tl.x ?? 0) * scaleX);
     const ty = Math.round(outH / 2 + (tl.y ?? 0) * scaleY);
     const opacity = ((tl.opacity ?? 100) / 100).toFixed(2);
-    const bold = (tl.fontWeight === "700" || tl.fontWeight === "800") ? 1 : 0;
-    const italic = tl.italic ? 1 : 0;
+    const bold = (tl.fontWeight === "700" || tl.fontWeight === "800");
+    const italic = !!tl.italic;
+    // ffmpeg drawtext has no italic= param — select the correct font variant instead
+    let fontSuffix = "";
+    if (bold && italic) fontSuffix = "-BoldOblique";
+    else if (bold) fontSuffix = "-Bold";
+    else if (italic) fontSuffix = "-Oblique";
 
     let xExpr = `${tx}`;
     if (tl.align === "center") xExpr = `${tx}-text_w/2`;
@@ -269,9 +274,8 @@ async function composeScene(
       `text='${content}':` +
       `fontcolor=${color}@${opacity}:` +
       `fontsize=${fontSize}:` +
-      `fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans${bold ? "-Bold" : ""}.ttf:` +
-      `x=${xExpr}:y=${ty}-text_h/2:` +
-      `italic=${italic}` +
+      `fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans${fontSuffix}.ttf:` +
+      `x=${xExpr}:y=${ty}-text_h/2` +
       `[${tagOut}]`
     );
     lastVideo = `[${tagOut}]`;
