@@ -41,7 +41,7 @@ app.post("/compose", async (req, res) => {
     }
   }
 
-  console.log(`[compose] projectId=${body.projectId} scenes=${body.scenes.length} resolution=${body.resolution ?? "1080p"}`);
+  console.log(`[compose] projectId=${body.projectId} scenes=${body.scenes.length} resolution=${body.resolution ?? "1080p"} musicTrackUrl=${body.musicTrackUrl || "null"} overlays=${body.scenes[0]?.overlayLayers?.length ?? 0}`);
 
   let videoPath: string | null = null;
   try {
