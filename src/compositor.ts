@@ -55,7 +55,8 @@ function escapeDrawtext(s: string): string {
     .replace(/'/g, "\\'")
     .replace(/:/g, "\\:")
     .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]");
+    .replace(/\]/g, "\\]")
+    .replace(/%/g, "\\%");
 }
 
 /** Parse first hex color from CSS gradient string */
