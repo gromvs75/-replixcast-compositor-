@@ -285,6 +285,41 @@ async function composeScene(
     lastVideo = `[${tagOut}]`;
   }
 
+  // ── Shape layers ──────────────────────────────────────────────────────────
+  // Supported: rect, roundedRect (→ drawbox), line (→ thin drawbox)
+  // circle, triangle, path: not supported by ffmpeg drawbox, skipped
+  const visibleShapes = (scene.shapeLayers || []).filter(
+    (sl) => sl.visible !== false && (sl.kind === "rect" || sl.kind === "roundedRect" || sl.kind === "line")
+  );
+  for (let i = 0; i < visibleShapes.length; i++) {
+    const sl = visibleShapes[i];
+    const sx = Math.round((sl.x ?? 0) * scaleX);
+    const sy = Math.round((sl.y ?? 0) * scaleY);
+    const sw = Math.round((sl.width ?? 100) * scaleX);
+    const sh = sl.kind === "line"
+      ? Math.round((sl.strokeWidth ?? 2) * scaleY)
+      : Math.round((sl.height ?? 100) * scaleY);
+    const opacity = ((sl.opacity ?? 100) / 100).toFixed(2);
+
+    const hasFill = sl.fill && sl.fill !== "none";
+    const hasStroke = sl.stroke && sl.stroke !== "none" && (sl.strokeWidth ?? 0) > 0;
+
+    if (hasFill) {
+      const fillColor = (sl.fill as string).replace("#", "0x");
+      const fillAlpha = (((sl.fillOpacity ?? 100) / 100) * parseFloat(opacity)).toFixed(2);
+      const tag = `shape_fill_${i}`;
+      filters.push(`${lastVideo}drawbox=x=${sx}:y=${sy}:w=${sw}:h=${sh}:color=${fillColor}@${fillAlpha}:t=fill[${tag}]`);
+      lastVideo = `[${tag}]`;
+    }
+    if (hasStroke) {
+      const strokeColor = (sl.stroke as string).replace("#", "0x");
+      const strokeW = Math.max(1, Math.round((sl.strokeWidth ?? 1) * Math.min(scaleX, scaleY)));
+      const tag = `shape_stroke_${i}`;
+      filters.push(`${lastVideo}drawbox=x=${sx}:y=${sy}:w=${sw}:h=${sh}:color=${strokeColor}@${opacity}:t=${strokeW}[${tag}]`);
+      lastVideo = `[${tag}]`;
+    }
+  }
+
   // ── Final output tag ──────────────────────────────────────────────────────
   // Rename last tag to [vout] if it doesn't already have a proper name
   if (lastVideo !== "[vout]") {
