@@ -30,6 +30,7 @@ export type OverlayLayerDraft = {
   scale?: number;   // multiplier, 1.0 = natural size
   opacity?: number; // 0–100
   visible?: boolean;
+  animation?: "none" | "fadeIn" | "slideUp" | "slideDown" | "slideLeft" | "slideRight" | "zoomIn" | "bounce" | "typewriter";
   startTime?: number; // seconds — show only from this time
   endTime?: number;   // seconds — hide after this time
 };

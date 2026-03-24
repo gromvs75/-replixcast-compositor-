@@ -275,6 +275,11 @@ async function composeScene(
       const tagIn = `ov_raw_${i}`;
       const tagOut = `ov_out_${i}`;
       const hasTimeRange = typeof ov.startTime === "number" && typeof ov.endTime === "number";
+      const overlayStart = hasTimeRange ? Math.max(0, ov.startTime as number) : 0;
+      const overlayEnd = hasTimeRange ? Math.max(overlayStart, ov.endTime as number) : dur;
+      const overlayDuration = Math.max(0.05, overlayEnd - overlayStart);
+      const animation = ov.animation || "none";
+      const hasOverlayAnimation = animation !== "none";
       const enableExpr = hasTimeRange
         ? `:enable='between(t,${ov.startTime!.toFixed(3)},${ov.endTime!.toFixed(3)})'`
         : "";
@@ -285,12 +290,49 @@ async function composeScene(
           `loop=loop=-1:size=32767:start=0[${tagIn}]`
         );
       } else {
-        filters.push(
-          `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
-          `format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`
-        );
+        const shouldUseTimedImageStream = hasTimeRange || hasOverlayAnimation;
+        if (shouldUseTimedImageStream) {
+          const animDuration = Math.min(0.6, overlayDuration);
+          const fadeExpr =
+            hasOverlayAnimation && animDuration > 0
+              ? `,fade=t=in:st=0:d=${animDuration.toFixed(3)}:alpha=1`
+              : "";
+          filters.push(
+            `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
+            `format=rgba,colorchannelmixer=aa=${ovOpacity},` +
+            `loop=loop=-1:size=1:start=0,trim=duration=${overlayDuration.toFixed(3)}` +
+            `${fadeExpr},setpts=PTS-STARTPTS+${overlayStart.toFixed(3)}/TB[${tagIn}]`
+          );
+        } else {
+          filters.push(
+            `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
+            `format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`
+          );
+        }
       }
-      filters.push(`${lastVideo}[${tagIn}]overlay=x=${ovX}:y=${ovY}${enableExpr}[${tagOut}]`);
+      const animProgress =
+        hasOverlayAnimation && overlayDuration > 0
+          ? `min(max((t-${overlayStart.toFixed(3)})/${Math.min(0.6, overlayDuration).toFixed(3)},0),1)`
+          : "1";
+      const slideOffsetX = Math.max(18, Math.round(42 * scaleX));
+      const slideOffsetY = Math.max(18, Math.round(42 * scaleY));
+      let ovXExpr = `${ovX}`;
+      let ovYExpr = `${ovY}`;
+      if (hasOverlayAnimation) {
+        if (animation === "slideLeft") {
+          ovXExpr = `${ovX}-${slideOffsetX}*(1-${animProgress})`;
+        } else if (animation === "slideRight") {
+          ovXExpr = `${ovX}+${slideOffsetX}*(1-${animProgress})`;
+        } else if (animation === "slideUp") {
+          ovYExpr = `${ovY}+${slideOffsetY}*(1-${animProgress})`;
+        } else if (animation === "slideDown") {
+          ovYExpr = `${ovY}-${slideOffsetY}*(1-${animProgress})`;
+        }
+      }
+      const overlayExpr = ov.kind === "image" && (hasTimeRange || hasOverlayAnimation)
+        ? `overlay=x='${ovXExpr}':y='${ovYExpr}':eof_action=pass`
+        : `overlay=x='${ovXExpr}':y='${ovYExpr}'${enableExpr}`;
+      filters.push(`${lastVideo}[${tagIn}]${overlayExpr}[${tagOut}]`);
       lastVideo = `[${tagOut}]`;
       continue;
     }
