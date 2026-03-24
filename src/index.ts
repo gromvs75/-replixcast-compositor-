@@ -22,6 +22,7 @@ app.post("/compose", async (req, res) => {
   const body = req.body as ComposeRequest;
 
   // Auth
+  console.log(`[auth] received="${String(body.secret||"").slice(0,8)}" env="${String(SECRET||"").slice(0,8)}" match=${body.secret===SECRET}`);
   if (SECRET && body.secret !== SECRET) {
     res.status(401).json({ status: "error", error: "Unauthorized" } satisfies ComposeResponse);
     return;
