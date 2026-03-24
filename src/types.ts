@@ -15,6 +15,8 @@ export type TextLayerDraft = {
   italic?: boolean;
   underline?: boolean;
   visible?: boolean;
+  startTime?: number; // seconds — show only from this time
+  endTime?: number;   // seconds — hide after this time
 };
 
 export type OverlayLayerDraft = {

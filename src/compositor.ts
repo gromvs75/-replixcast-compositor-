@@ -269,6 +269,9 @@ async function composeScene(
     if (tl.align === "center") xExpr = `${tx}-text_w/2`;
     else if (tl.align === "right") xExpr = `${tx}-text_w`;
 
+    const hasTimeRange = typeof tl.startTime === "number" && typeof tl.endTime === "number";
+    const enableExpr = hasTimeRange ? `:enable='between(t,${tl.startTime.toFixed(3)},${tl.endTime.toFixed(3)})'` : "";
+
     filters.push(
       `${lastVideo}drawtext=` +
       `text='${content}':` +
@@ -276,6 +279,7 @@ async function composeScene(
       `fontsize=${fontSize}:` +
       `fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans${fontSuffix}.ttf:` +
       `x=${xExpr}:y=${ty}-text_h/2` +
+      enableExpr +
       `[${tagOut}]`
     );
     lastVideo = `[${tagOut}]`;
