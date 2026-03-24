@@ -269,6 +269,8 @@ async function composeScene(
       const ovX = Math.round((ov.x ?? 0) * scaleX);
       const ovY = Math.round((ov.y ?? 0) * scaleY);
       const ovScale = ov.scale ?? 1;
+      const ovWidth = typeof ov.width === "number" ? Math.max(2, Math.round(ov.width * scaleX)) : null;
+      const ovHeight = typeof ov.height === "number" ? Math.max(2, Math.round(ov.height * scaleY)) : null;
       const ovOpacity = ((ov.opacity ?? 100) / 100).toFixed(2);
       const tagIn = `ov_raw_${i}`;
       const tagOut = `ov_out_${i}`;
@@ -279,11 +281,14 @@ async function composeScene(
 
       if (ov.kind === "video") {
         filters.push(
-          `[${ovIdx}:v]scale=iw*${ovScale}:-2,setpts=PTS-STARTPTS,trim=duration=${dur},` +
+          `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},setpts=PTS-STARTPTS,trim=duration=${dur},` +
           `loop=loop=-1:size=32767:start=0[${tagIn}]`
         );
       } else {
-        filters.push(`[${ovIdx}:v]scale=iw*${ovScale}:-2,format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`);
+        filters.push(
+          `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
+          `format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`
+        );
       }
       filters.push(`${lastVideo}[${tagIn}]overlay=x=${ovX}:y=${ovY}${enableExpr}[${tagOut}]`);
       lastVideo = `[${tagOut}]`;

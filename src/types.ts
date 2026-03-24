@@ -25,6 +25,8 @@ export type OverlayLayerDraft = {
   kind: "image" | "video";
   x?: number;       // px offset from canvas top-left
   y?: number;
+  width?: number;
+  height?: number;
   scale?: number;   // multiplier, 1.0 = natural size
   opacity?: number; // 0–100
   visible?: boolean;
