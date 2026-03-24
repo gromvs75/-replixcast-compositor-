@@ -293,12 +293,13 @@ async function composeScene(
   );
   for (let i = 0; i < visibleShapes.length; i++) {
     const sl = visibleShapes[i];
-    const sx = Math.round((sl.x ?? 0) * scaleX);
-    const sy = Math.round((sl.y ?? 0) * scaleY);
     const sw = Math.round((sl.width ?? 100) * scaleX);
     const sh = sl.kind === "line"
       ? Math.round((sl.strokeWidth ?? 2) * scaleY)
       : Math.round((sl.height ?? 100) * scaleY);
+    // x/y in editor = offset of shape CENTER from stage center → convert to drawbox top-left
+    const sx = Math.round(outW / 2 + (sl.x ?? 0) * scaleX - sw / 2);
+    const sy = Math.round(outH / 2 + (sl.y ?? 0) * scaleY - sh / 2);
     const opacity = ((sl.opacity ?? 100) / 100).toFixed(2);
 
     const hasFill = sl.fill && sl.fill !== "none";
