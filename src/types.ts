@@ -28,6 +28,8 @@ export type OverlayLayerDraft = {
   scale?: number;   // multiplier, 1.0 = natural size
   opacity?: number; // 0–100
   visible?: boolean;
+  startTime?: number; // seconds — show only from this time
+  endTime?: number;   // seconds — hide after this time
 };
 
 export type ShapeLayerDraft = {
@@ -45,6 +47,8 @@ export type ShapeLayerDraft = {
   rotation?: number;
   opacity?: number;
   visible?: boolean;
+  startTime?: number;
+  endTime?: number;
 };
 
 export type MusicTrack = {

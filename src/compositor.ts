@@ -31,6 +31,19 @@ function tmpDir(): string {
 }
 
 async function downloadFile(url: string, destPath: string): Promise<void> {
+  if (url.startsWith("data:")) {
+    const match = url.match(/^data:([^;,]+)?((?:;[^,]+)*)?,([\s\S]+)$/);
+    if (!match) throw new Error("Invalid data URL");
+    const meta = `${match[1] || ""}${match[2] || ""}`;
+    const payload = match[3] || "";
+    const isBase64 = /;base64/i.test(meta);
+    const buffer = isBase64
+      ? Buffer.from(payload, "base64")
+      : Buffer.from(decodeURIComponent(payload), "utf8");
+    await fs.promises.writeFile(destPath, buffer);
+    return;
+  }
+
   return new Promise((resolve, reject) => {
     const proto = url.startsWith("https") ? https : http;
     const file = fs.createWriteStream(destPath);
@@ -221,103 +234,134 @@ async function composeScene(
     lastVideo = "[av_out]";
   }
 
-  // ── Overlay layers ────────────────────────────────────────────────────────
-  for (let i = 0; i < visibleOverlays.length; i++) {
-    const ov = visibleOverlays[i];
-    const ovIdx = inputIdx++;
-    const ovX = Math.round((ov.x ?? 0) * scaleX);
-    const ovY = Math.round((ov.y ?? 0) * scaleY);
-    const ovScale = ov.scale ?? 1;
-    const ovOpacity = ((ov.opacity ?? 100) / 100).toFixed(2);
-    const tagIn = `ov_raw_${i}`;
-    const tagOut = `ov_out_${i}`;
+  const avatarInputIdx = avatarIdx;
+  const overlayInputStartIdx = avatarInputIdx + 1;
 
-    if (ov.kind === "video") {
-      filters.push(
-        `[${ovIdx}:v]scale=iw*${ovScale}:-2,setpts=PTS-STARTPTS,trim=duration=${dur},` +
-        `loop=loop=-1:size=32767:start=0[${tagIn}]`
-      );
-    } else {
-      filters.push(`[${ovIdx}:v]scale=iw*${ovScale}:-2,format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`);
-    }
-    filters.push(`${lastVideo}[${tagIn}]overlay=x=${ovX}:y=${ovY}[${tagOut}]`);
-    lastVideo = `[${tagOut}]`;
-  }
-
-  // ── Text layers ───────────────────────────────────────────────────────────
-  const visibleText = (scene.textLayers || []).filter(l => l.visible !== false && l.content?.trim());
-  for (let i = 0; i < visibleText.length; i++) {
-    const tl = visibleText[i];
-    const tagOut = `text_out_${i}`;
-    const content = escapeDrawtext(tl.content || "");
-    const color = (tl.color || "#ffffff").replace("#", "0x");
-    const fontSize = Math.round((tl.fontSize ?? 32) * (tl.scale ?? 1) * scaleY);
-    const fontFamily = tl.fontFamily || "Sans";
-    // x/y: offset from canvas center
-    const tx = Math.round(outW / 2 + (tl.x ?? 0) * scaleX);
-    const ty = Math.round(outH / 2 + (tl.y ?? 0) * scaleY);
-    const opacity = ((tl.opacity ?? 100) / 100).toFixed(2);
-    const bold = (tl.fontWeight === "700" || tl.fontWeight === "800");
-    const italic = !!tl.italic;
-    // ffmpeg drawtext has no italic= param — select the correct font variant instead
-    let fontSuffix = "";
-    if (bold && italic) fontSuffix = "-BoldOblique";
-    else if (bold) fontSuffix = "-Bold";
-    else if (italic) fontSuffix = "-Oblique";
-
-    let xExpr = `${tx}`;
-    if (tl.align === "center") xExpr = `${tx}-text_w/2`;
-    else if (tl.align === "right") xExpr = `${tx}-text_w`;
-
-    const hasTimeRange = typeof tl.startTime === "number" && typeof tl.endTime === "number";
-    const enableExpr = hasTimeRange ? `:enable='between(t,${(tl.startTime as number).toFixed(3)},${(tl.endTime as number).toFixed(3)})'` : "";
-
-    filters.push(
-      `${lastVideo}drawtext=` +
-      `text='${content}':` +
-      `fontcolor=${color}@${opacity}:` +
-      `fontsize=${fontSize}:` +
-      `fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans${fontSuffix}.ttf:` +
-      `x=${xExpr}:y=${ty}-text_h/2` +
-      enableExpr +
-      `[${tagOut}]`
-    );
-    lastVideo = `[${tagOut}]`;
-  }
-
-  // ── Shape layers ──────────────────────────────────────────────────────────
-  // Supported: rect, roundedRect (→ drawbox), line (→ thin drawbox)
-  // circle, triangle, path: not supported by ffmpeg drawbox, skipped
+  const visibleText = (scene.textLayers || []).filter((l) => l.visible !== false && l.content?.trim());
   const visibleShapes = (scene.shapeLayers || []).filter(
-    (sl) => sl.visible !== false && (sl.kind === "rect" || sl.kind === "roundedRect" || sl.kind === "line")
+    (sl) => sl.visible !== false && (sl.kind === "rect" || sl.kind === "line")
   );
-  for (let i = 0; i < visibleShapes.length; i++) {
-    const sl = visibleShapes[i];
-    const sw = Math.round((sl.width ?? 100) * scaleX);
-    const sh = sl.kind === "line"
-      ? Math.round((sl.strokeWidth ?? 2) * scaleY)
-      : Math.round((sl.height ?? 100) * scaleY);
-    // x/y in editor = offset of shape CENTER from stage center → convert to drawbox top-left
-    const sx = Math.round(outW / 2 + (sl.x ?? 0) * scaleX - sw / 2);
-    const sy = Math.round(outH / 2 + (sl.y ?? 0) * scaleY - sh / 2);
-    const opacity = ((sl.opacity ?? 100) / 100).toFixed(2);
 
-    const hasFill = sl.fill && sl.fill !== "none";
-    const hasStroke = sl.stroke && sl.stroke !== "none" && (sl.strokeWidth ?? 0) > 0;
+  const overlayKeyOrder = visibleOverlays.map((ov) => `overlay:${ov.id}`);
+  const shapeKeyOrder = visibleShapes.map((sl) => `shape:${sl.id}`);
+  const textKeyOrder = visibleText.map((tl) => `text:${tl.id}`);
+  const defaultLayerOrder = [...overlayKeyOrder, ...shapeKeyOrder, ...textKeyOrder];
+  const effectiveLayerOrder = scene.layerOrder?.length
+    ? [
+        ...scene.layerOrder.filter((key) => defaultLayerOrder.includes(key)),
+        ...defaultLayerOrder.filter((key) => !scene.layerOrder?.includes(key)),
+      ]
+    : defaultLayerOrder;
 
-    if (hasFill) {
-      const fillColor = (sl.fill as string).replace("#", "0x");
-      const fillAlpha = (((sl.fillOpacity ?? 100) / 100) * parseFloat(opacity)).toFixed(2);
-      const tag = `shape_fill_${i}`;
-      filters.push(`${lastVideo}drawbox=x=${sx}:y=${sy}:w=${sw}:h=${sh}:color=${fillColor}@${fillAlpha}:t=fill[${tag}]`);
-      lastVideo = `[${tag}]`;
+  const overlayByKey = new Map(
+    visibleOverlays.map((ov, i) => [
+      `overlay:${ov.id}`,
+      { layer: ov, index: i, inputIdx: overlayInputStartIdx + i },
+    ])
+  );
+  const textByKey = new Map(visibleText.map((tl, i) => [`text:${tl.id}`, { layer: tl, index: i }]));
+  const shapeByKey = new Map(visibleShapes.map((sl, i) => [`shape:${sl.id}`, { layer: sl, index: i }]));
+
+  for (const layerKey of effectiveLayerOrder) {
+    const overlayEntry = overlayByKey.get(layerKey);
+    if (overlayEntry) {
+      const { layer: ov, index: i, inputIdx: ovIdx } = overlayEntry;
+      const ovX = Math.round((ov.x ?? 0) * scaleX);
+      const ovY = Math.round((ov.y ?? 0) * scaleY);
+      const ovScale = ov.scale ?? 1;
+      const ovOpacity = ((ov.opacity ?? 100) / 100).toFixed(2);
+      const tagIn = `ov_raw_${i}`;
+      const tagOut = `ov_out_${i}`;
+      const hasTimeRange = typeof ov.startTime === "number" && typeof ov.endTime === "number";
+      const enableExpr = hasTimeRange
+        ? `:enable='between(t,${ov.startTime!.toFixed(3)},${ov.endTime!.toFixed(3)})'`
+        : "";
+
+      if (ov.kind === "video") {
+        filters.push(
+          `[${ovIdx}:v]scale=iw*${ovScale}:-2,setpts=PTS-STARTPTS,trim=duration=${dur},` +
+          `loop=loop=-1:size=32767:start=0[${tagIn}]`
+        );
+      } else {
+        filters.push(`[${ovIdx}:v]scale=iw*${ovScale}:-2,format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`);
+      }
+      filters.push(`${lastVideo}[${tagIn}]overlay=x=${ovX}:y=${ovY}${enableExpr}[${tagOut}]`);
+      lastVideo = `[${tagOut}]`;
+      continue;
     }
-    if (hasStroke) {
-      const strokeColor = (sl.stroke as string).replace("#", "0x");
-      const strokeW = Math.max(1, Math.round((sl.strokeWidth ?? 1) * Math.min(scaleX, scaleY)));
-      const tag = `shape_stroke_${i}`;
-      filters.push(`${lastVideo}drawbox=x=${sx}:y=${sy}:w=${sw}:h=${sh}:color=${strokeColor}@${opacity}:t=${strokeW}[${tag}]`);
-      lastVideo = `[${tag}]`;
+
+    const textEntry = textByKey.get(layerKey);
+    if (textEntry) {
+      const { layer: tl, index: i } = textEntry;
+      const tagOut = `text_out_${i}`;
+      const content = escapeDrawtext(tl.content || "");
+      const color = (tl.color || "#ffffff").replace("#", "0x");
+      const fontSize = Math.round((tl.fontSize ?? 32) * (tl.scale ?? 1) * scaleY);
+      const tx = Math.round(outW / 2 + (tl.x ?? 0) * scaleX);
+      const ty = Math.round(outH / 2 + (tl.y ?? 0) * scaleY);
+      const opacity = ((tl.opacity ?? 100) / 100).toFixed(2);
+      const bold = tl.fontWeight === "700" || tl.fontWeight === "800";
+      const italic = !!tl.italic;
+      let fontSuffix = "";
+      if (bold && italic) fontSuffix = "-BoldOblique";
+      else if (bold) fontSuffix = "-Bold";
+      else if (italic) fontSuffix = "-Oblique";
+
+      let xExpr = `${tx}`;
+      if (tl.align === "center") xExpr = `${tx}-text_w/2`;
+      else if (tl.align === "right") xExpr = `${tx}-text_w`;
+
+      const hasTimeRange = typeof tl.startTime === "number" && typeof tl.endTime === "number";
+      const enableExpr = hasTimeRange
+        ? `:enable='between(t,${tl.startTime!.toFixed(3)},${tl.endTime!.toFixed(3)})'`
+        : "";
+
+      filters.push(
+        `${lastVideo}drawtext=` +
+        `text='${content}':` +
+        `fontcolor=${color}@${opacity}:` +
+        `fontsize=${fontSize}:` +
+        `fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans${fontSuffix}.ttf:` +
+        `x=${xExpr}:y=${ty}-text_h/2` +
+        enableExpr +
+        `[${tagOut}]`
+      );
+      lastVideo = `[${tagOut}]`;
+      continue;
+    }
+
+    const shapeEntry = shapeByKey.get(layerKey);
+    if (shapeEntry) {
+      const { layer: sl, index: i } = shapeEntry;
+      const sw = Math.round((sl.width ?? 100) * scaleX);
+      const sh =
+        sl.kind === "line"
+          ? Math.round((sl.strokeWidth ?? 2) * scaleY)
+          : Math.round((sl.height ?? 100) * scaleY);
+      const sx = Math.round(outW / 2 + (sl.x ?? 0) * scaleX - sw / 2);
+      const sy = Math.round(outH / 2 + (sl.y ?? 0) * scaleY - sh / 2);
+      const opacity = ((sl.opacity ?? 100) / 100).toFixed(2);
+      const hasFill = sl.fill && sl.fill !== "none";
+      const hasStroke = sl.stroke && sl.stroke !== "none" && (sl.strokeWidth ?? 0) > 0;
+      const hasTimeRange = typeof sl.startTime === "number" && typeof sl.endTime === "number";
+      const enableExpr = hasTimeRange
+        ? `:enable='between(t,${sl.startTime!.toFixed(3)},${sl.endTime!.toFixed(3)})'`
+        : "";
+
+      if (hasFill) {
+        const fillColor = (sl.fill as string).replace("#", "0x");
+        const fillAlpha = (((sl.fillOpacity ?? 100) / 100) * parseFloat(opacity)).toFixed(2);
+        const tag = `shape_fill_${i}`;
+        filters.push(`${lastVideo}drawbox=x=${sx}:y=${sy}:w=${sw}:h=${sh}:color=${fillColor}@${fillAlpha}:t=fill${enableExpr}[${tag}]`);
+        lastVideo = `[${tag}]`;
+      }
+      if (hasStroke) {
+        const strokeColor = (sl.stroke as string).replace("#", "0x");
+        const strokeW = Math.max(1, Math.round((sl.strokeWidth ?? 1) * Math.min(scaleX, scaleY)));
+        const tag = `shape_stroke_${i}`;
+        filters.push(`${lastVideo}drawbox=x=${sx}:y=${sy}:w=${sw}:h=${sh}:color=${strokeColor}@${opacity}:t=${strokeW}${enableExpr}[${tag}]`);
+        lastVideo = `[${tag}]`;
+      }
     }
   }
 
@@ -509,7 +553,7 @@ export async function compose(req: ComposeRequest): Promise<string> {
     if (req.musicTrackUrl) {
       finalPath = path.join(workDir, "final.mp4");
       await mixMusic(
-        concatPath,
+        transPath,
         finalPath,
         workDir,
         req.musicTrackUrl,
