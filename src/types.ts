@@ -70,6 +70,14 @@ export type SceneInput = {
   layerOrder?: string[];
 };
 
+// ─── Video transitions ────────────────────────────────────────────────────────
+
+export type VideoTransition = {
+  time: number;     // seconds — cut point in original video
+  kind: "fade" | "dissolve" | "zoom" | "slideLeft" | "slideRight" | "slideUp" | "slideDown";
+  duration: number; // seconds
+};
+
 // ─── Compose request ─────────────────────────────────────────────────────────
 
 export type ComposeRequest = {
@@ -84,6 +92,8 @@ export type ComposeRequest = {
   musicVolume?: number;  // 0–1, default 0.3
   musicTrimToVideo?: boolean;
   musicFadeOut?: boolean;
+  // Scene-to-scene transitions applied after composition
+  videoTransitions?: VideoTransition[];
   secret: string;
 };
 

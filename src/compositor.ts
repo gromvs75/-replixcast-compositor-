@@ -6,7 +6,7 @@ import * as http from "http";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { v4 as uuid } from "uuid";
-import type { SceneInput, ComposeRequest } from "./types";
+import type { SceneInput, ComposeRequest, VideoTransition } from "./types";
 
 const execAsync = promisify(exec);
 
@@ -399,6 +399,81 @@ async function mixMusic(
   await execAsync(cmd, { maxBuffer: 100 * 1024 * 1024 });
 }
 
+// ─── Apply video transitions (xfade) ─────────────────────────────────────────
+// Maps SceneTransition kind to ffmpeg xfade transition names
+const XFADE_MAP: Record<string, string> = {
+  fade:       "fade",
+  dissolve:   "dissolve",
+  zoom:       "zoomin",
+  slideLeft:  "slideleft",
+  slideRight: "slideright",
+  slideUp:    "slideup",
+  slideDown:  "slidedown",
+};
+
+async function applyTransitions(
+  inputVideo: string,
+  transitions: VideoTransition[],
+  outPath: string,
+): Promise<void> {
+  if (transitions.length === 0) {
+    fs.copyFileSync(inputVideo, outPath);
+    return;
+  }
+
+  const sorted = [...transitions].sort((a, b) => a.time - b.time);
+  const N = sorted.length + 1; // number of segments
+
+  const filters: string[] = [];
+
+  // Split input into N copies for video and audio
+  const vsplit = Array.from({ length: N }, (_, k) => `vsplit${k}`);
+  const asplit = Array.from({ length: N }, (_, k) => `asplit${k}`);
+  filters.push(`[0:v]split=${N}${vsplit.map(t => `[${t}]`).join("")}`);
+  filters.push(`[0:a]asplit=${N}${asplit.map(t => `[${t}]`).join("")}`);
+
+  // Trim each segment: segment k spans from prevCut-prevDur to nextCut
+  for (let k = 0; k < N; k++) {
+    const start = k === 0 ? 0 : Math.max(0, sorted[k - 1].time - sorted[k - 1].duration);
+    const end   = k < N - 1 ? sorted[k].time : undefined;
+    const vEnd  = end !== undefined ? `:end=${end.toFixed(3)}` : "";
+    const aEnd  = end !== undefined ? `:end=${end.toFixed(3)}` : "";
+    filters.push(`[${vsplit[k]}]trim=start=${start.toFixed(3)}${vEnd},setpts=PTS-STARTPTS[vs${k}]`);
+    filters.push(`[${asplit[k]}]atrim=start=${start.toFixed(3)}${aEnd},asetpts=PTS-STARTPTS[as${k}]`);
+  }
+
+  // Chain xfade (video) and acrossfade (audio)
+  let lastV = "[vs0]";
+  let lastA = "[as0]";
+  for (let k = 0; k < sorted.length; k++) {
+    const t      = sorted[k];
+    const xtype  = XFADE_MAP[t.kind] ?? "fade";
+    const dur    = Math.max(0.1, t.duration);
+    const offset = Math.max(0.001, t.time - dur);
+    const isLast = k === sorted.length - 1;
+    const tagV   = isLast ? "[vout]" : `[xv${k}]`;
+    const tagA   = isLast ? "[aout]" : `[xa${k}]`;
+
+    filters.push(`${lastV}[vs${k + 1}]xfade=transition=${xtype}:duration=${dur.toFixed(3)}:offset=${offset.toFixed(3)}${tagV}`);
+    filters.push(`${lastA}[as${k + 1}]acrossfade=d=${dur.toFixed(3)}${tagA}`);
+
+    lastV = tagV;
+    lastA = tagA;
+  }
+
+  const cmd = [
+    "ffmpeg -y",
+    `-i "${inputVideo}"`,
+    `-filter_complex "${filters.join(";")}"`,
+    `-map "[vout]" -map "[aout]"`,
+    `-c:v libx264 -preset fast -crf 22 -pix_fmt yuv420p`,
+    `-c:a aac -b:a 128k -ar 44100`,
+    `"${outPath}"`,
+  ].join(" ");
+
+  await execAsync(cmd, { maxBuffer: 100 * 1024 * 1024 });
+}
+
 // ─── Main compose function ────────────────────────────────────────────────────
 
 export async function compose(req: ComposeRequest): Promise<string> {
@@ -421,8 +496,16 @@ export async function compose(req: ComposeRequest): Promise<string> {
     const concatPath = path.join(workDir, "concat.mp4");
     await concatenateScenes(scenePaths, concatPath, workDir);
 
+    // Apply scene transitions (xfade) if any
+    let transPath = concatPath;
+    const transitions = (req.videoTransitions ?? []).filter(t => t.time > 0 && t.duration > 0);
+    if (transitions.length > 0) {
+      transPath = path.join(workDir, "with_transitions.mp4");
+      await applyTransitions(concatPath, transitions, transPath);
+    }
+
     // Add music if provided
-    let finalPath = concatPath;
+    let finalPath = transPath;
     if (req.musicTrackUrl) {
       finalPath = path.join(workDir, "final.mp4");
       await mixMusic(
