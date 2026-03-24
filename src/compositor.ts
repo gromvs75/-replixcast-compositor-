@@ -523,9 +523,11 @@ async function applyTransitions(
   filters.push(`[0:v]split=${N}${vsplit.map(t => `[${t}]`).join("")}`);
   filters.push(`[0:a]asplit=${N}${asplit.map(t => `[${t}]`).join("")}`);
 
-  // Trim each segment: segment k spans from prevCut-prevDur to nextCut
+  // Trim each segment from the hard cut boundaries.
+  // xfade blends the tail of segment k with the head of segment k+1,
+  // so the next segment must start at the cut itself, not at cut-duration.
   for (let k = 0; k < N; k++) {
-    const start = k === 0 ? 0 : Math.max(0, sorted[k - 1].time - sorted[k - 1].duration);
+    const start = k === 0 ? 0 : Math.max(0, sorted[k - 1].time);
     const end   = k < N - 1 ? sorted[k].time : undefined;
     const vEnd  = end !== undefined ? `:end=${end.toFixed(3)}` : "";
     const aEnd  = end !== undefined ? `:end=${end.toFixed(3)}` : "";
