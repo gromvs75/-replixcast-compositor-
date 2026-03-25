@@ -115,11 +115,14 @@ async function composeScene(
 ): Promise<void> {
   const scaleX = outW / refW;
   const scaleY = outH / refH;
-  const dur = scene.durationSeconds;
-  const avatarTrimStart = Math.max(0, Number(scene.avatarStartTimeSeconds) || 0);
 
-  const inputSpecs: Array<{ path: string; prefix?: string }> = [];
-  let bgIdx: number | null = null;
+  // Download avatar video
+  const avatarPath = path.join(workDir, `avatar_${sceneIdx}.mp4`);
+  await downloadFile(scene.avatarVideoUrl, avatarPath);
+
+  // Build inputs list
+  const inputs: string[] = [avatarPath];
+  const overlayPaths: string[] = [];
 
   // Download visible overlay layers
   const visibleOverlays = (scene.overlayLayers || []).filter(l => l.visible !== false && l.url);
@@ -127,33 +130,28 @@ async function composeScene(
     const ext = ov.kind === "video" ? ".mp4" : ".png";
     const p = path.join(workDir, `overlay_${sceneIdx}_${ov.id}${ext}`);
     await downloadFile(ov.url, p);
-    inputSpecs.push({ path: p });
+    inputs.push(p);
+    overlayPaths.push(p);
   }
 
   // Download background image/video if needed
   let bgImagePath: string | null = null;
+  let bgGradientPath: string | null = null;
   if (scene.backgroundVisible !== false && scene.backgroundType === "image" && scene.backgroundValue) {
     bgImagePath = path.join(workDir, `bg_${sceneIdx}.jpg`);
     await downloadFile(scene.backgroundValue, bgImagePath);
-    inputSpecs.unshift({ path: bgImagePath });
-    bgIdx = 0;
+    inputs.unshift(bgImagePath);
   } else if (scene.backgroundVisible !== false && scene.backgroundType === "video" && scene.backgroundValue) {
     bgImagePath = path.join(workDir, `bg_${sceneIdx}.mp4`);
     await downloadFile(scene.backgroundValue, bgImagePath);
-    inputSpecs.unshift({ path: bgImagePath });
-    bgIdx = 0;
+    inputs.unshift(bgImagePath);
   }
 
-  const avatarPath = path.join(workDir, `avatar_${sceneIdx}.mp4`);
-  await downloadFile(scene.avatarVideoUrl, avatarPath);
-  inputSpecs.push({
-    path: avatarPath,
-    prefix: `${avatarTrimStart > 0 ? `-ss ${avatarTrimStart.toFixed(3)} ` : ""}-t ${dur.toFixed(3)}`,
-  });
-  const avatarIdx = inputSpecs.length - 1;
+  const dur = scene.durationSeconds;
 
   // ── Build filter_complex ───────────────────────────────────────────────────
 
+  let inputIdx = 0;
   const filters: string[] = [];
   let lastVideo = "";
 
@@ -188,7 +186,8 @@ async function composeScene(
       filters.push(`color=c=${fallback}:s=${outW}x${outH}:d=${dur}[bg]`);
     }
     lastVideo = "[bg]";
-  } else if ((scene.backgroundType === "image" || scene.backgroundType === "video") && bgImagePath && bgIdx !== null) {
+  } else if ((scene.backgroundType === "image" || scene.backgroundType === "video") && bgImagePath) {
+    const bgIdx = inputIdx++;
     if (scene.backgroundType === "image") {
       filters.push(
         `[${bgIdx}:v]scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH},` +
@@ -212,6 +211,7 @@ async function composeScene(
   }
 
   // ── Avatar ────────────────────────────────────────────────────────────────
+  const avatarIdx = inputIdx++;
   const ap = scene.avatarParams ?? {};
   const ax = (ap.x ?? 0) * scaleX;
   const ay = (ap.y ?? 0) * scaleY;
@@ -234,6 +234,9 @@ async function composeScene(
     lastVideo = "[av_out]";
   }
 
+  const avatarInputIdx = avatarIdx;
+  const overlayInputStartIdx = avatarInputIdx + 1;
+
   const visibleText = (scene.textLayers || []).filter((l) => l.visible !== false && l.content?.trim());
   const visibleShapes = (scene.shapeLayers || []).filter(
     (sl) => sl.visible !== false && (sl.kind === "rect" || sl.kind === "line")
@@ -250,17 +253,11 @@ async function composeScene(
       ]
     : defaultLayerOrder;
 
-  const overlayByKey = new Map<string, { layer: typeof visibleOverlays[number]; inputIdx: number }>(
-    visibleOverlays.map((ov) => {
-      const suffix = `overlay_${sceneIdx}_${ov.id}${ov.kind === "video" ? ".mp4" : ".png"}`;
-      return [
-        `overlay:${ov.id}`,
-        {
-          layer: ov,
-          inputIdx: inputSpecs.findIndex((spec) => spec.path.endsWith(suffix)),
-        },
-      ];
-    })
+  const overlayByKey = new Map(
+    visibleOverlays.map((ov, i) => [
+      `overlay:${ov.id}`,
+      { layer: ov, index: i, inputIdx: overlayInputStartIdx + i },
+    ])
   );
   const textByKey = new Map(visibleText.map((tl, i) => [`text:${tl.id}`, { layer: tl, index: i }]));
   const shapeByKey = new Map(visibleShapes.map((sl, i) => [`shape:${sl.id}`, { layer: sl, index: i }]));
@@ -268,17 +265,15 @@ async function composeScene(
   for (const layerKey of effectiveLayerOrder) {
     const overlayEntry = overlayByKey.get(layerKey);
     if (overlayEntry) {
-      const { layer: ov, inputIdx: ovIdx } = overlayEntry;
-      if (ovIdx < 0) continue;
+      const { layer: ov, index: i, inputIdx: ovIdx } = overlayEntry;
       const ovX = Math.round((ov.x ?? 0) * scaleX);
       const ovY = Math.round((ov.y ?? 0) * scaleY);
       const ovScale = ov.scale ?? 1;
       const ovWidth = typeof ov.width === "number" ? Math.max(2, Math.round(ov.width * scaleX)) : null;
       const ovHeight = typeof ov.height === "number" ? Math.max(2, Math.round(ov.height * scaleY)) : null;
       const ovOpacity = ((ov.opacity ?? 100) / 100).toFixed(2);
-      const safeId = ov.id.replace(/[^a-zA-Z0-9_-]/g, "_");
-      const tagIn = `ov_raw_${safeId}`;
-      const tagOut = `ov_out_${safeId}`;
+      const tagIn = `ov_raw_${i}`;
+      const tagOut = `ov_out_${i}`;
       const hasTimeRange = typeof ov.startTime === "number" && typeof ov.endTime === "number";
       const overlayStart = hasTimeRange ? Math.max(0, ov.startTime as number) : 0;
       const overlayEnd = hasTimeRange ? Math.max(overlayStart, ov.endTime as number) : dur;
@@ -424,9 +419,7 @@ async function composeScene(
   }
 
   // ── Assemble ffmpeg command ───────────────────────────────────────────────
-  const inputArgs = inputSpecs
-    .map((spec) => `${spec.prefix ? `${spec.prefix} ` : ""}-i "${spec.path}"`)
-    .join(" ");
+  const inputArgs = inputs.map(p => `-i "${p}"`).join(" ");
   const filterStr = filters.join(";");
 
   const cmd = [

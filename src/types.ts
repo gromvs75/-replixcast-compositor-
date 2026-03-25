@@ -63,7 +63,6 @@ export type MusicTrack = {
 
 export type SceneInput = {
   avatarVideoUrl: string;           // HeyGen rendered video URL
-  avatarStartTimeSeconds?: number;  // trim shared avatar/base video from this offset
   durationSeconds: number;
   backgroundType?: "color" | "gradient" | "image" | "video" | null;
   backgroundValue?: string | null;
