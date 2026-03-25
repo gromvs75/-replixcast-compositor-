@@ -321,17 +321,20 @@ async function composeScene(
           : "1";
       const slideOffsetX = Math.max(18, Math.round(42 * scaleX));
       const slideOffsetY = Math.max(18, Math.round(42 * scaleY));
-      let ovXExpr = `${ovX}`;
-      let ovYExpr = `${ovY}`;
+      const anchor = ov.anchor || "center";
+      const ovBaseXExpr = anchor === "topLeft" ? `${ovX}` : `(main_w-overlay_w)/2+${ovX}`;
+      const ovBaseYExpr = anchor === "topLeft" ? `${ovY}` : `(main_h-overlay_h)/2+${ovY}`;
+      let ovXExpr = ovBaseXExpr;
+      let ovYExpr = ovBaseYExpr;
       if (hasOverlayAnimation) {
         if (animation === "slideLeft") {
-          ovXExpr = `${ovX}-${slideOffsetX}*(1-${animProgress})`;
+          ovXExpr = `${ovBaseXExpr}-${slideOffsetX}*(1-${animProgress})`;
         } else if (animation === "slideRight") {
-          ovXExpr = `${ovX}+${slideOffsetX}*(1-${animProgress})`;
+          ovXExpr = `${ovBaseXExpr}+${slideOffsetX}*(1-${animProgress})`;
         } else if (animation === "slideUp") {
-          ovYExpr = `${ovY}+${slideOffsetY}*(1-${animProgress})`;
+          ovYExpr = `${ovBaseYExpr}+${slideOffsetY}*(1-${animProgress})`;
         } else if (animation === "slideDown") {
-          ovYExpr = `${ovY}-${slideOffsetY}*(1-${animProgress})`;
+          ovYExpr = `${ovBaseYExpr}-${slideOffsetY}*(1-${animProgress})`;
         }
       }
       const overlayExpr = ov.kind === "image" && (hasTimeRange || hasOverlayAnimation)
