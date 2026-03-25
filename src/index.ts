@@ -4,7 +4,7 @@ import { uploadToFirebase } from "./firebase";
 import type { ComposeRequest, ComposeResponse } from "./types";
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "25mb" }));
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const SECRET = process.env.COMPOSITOR_SECRET;
