@@ -359,6 +359,11 @@ async function composeScene(
         ? `:enable='between(t,${tl.startTime!.toFixed(3)},${tl.endTime!.toFixed(3)})'`
         : "";
 
+      const hasStroke = (tl.strokeWidth ?? 0) > 0 && tl.stroke;
+      const borderExpr = hasStroke
+        ? `:bordercolor=${(tl.stroke as string).replace("#", "0x")}:borderw=${Math.round((tl.strokeWidth as number) * scaleY)}`
+        : "";
+
       filters.push(
         `${lastVideo}drawtext=` +
         `text='${content}':` +
@@ -366,6 +371,7 @@ async function composeScene(
         `fontsize=${fontSize}:` +
         `fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans${fontSuffix}.ttf:` +
         `x=${xExpr}:y=${ty}-text_h/2` +
+        borderExpr +
         enableExpr +
         `[${tagOut}]`
       );

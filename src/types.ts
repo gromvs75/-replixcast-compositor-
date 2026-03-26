@@ -14,6 +14,8 @@ export type TextLayerDraft = {
   opacity?: number;  // 0–100
   italic?: boolean;
   underline?: boolean;
+  stroke?: string;
+  strokeWidth?: number;
   visible?: boolean;
   startTime?: number; // seconds — show only from this time
   endTime?: number;   // seconds — hide after this time
