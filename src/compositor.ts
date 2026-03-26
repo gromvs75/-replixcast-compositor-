@@ -62,6 +62,60 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
   });
 }
 
+type StaticOverlayCompositeInput = {
+  path: string;
+  x: number;
+  y: number;
+  width: number | null;
+  height: number | null;
+  scale: number;
+  opacity: string;
+};
+
+async function renderStaticOverlayComposite(
+  layers: StaticOverlayCompositeInput[],
+  outPath: string,
+  outW: number,
+  outH: number,
+): Promise<void> {
+  if (!layers.length) throw new Error("Static overlay composite requires at least one layer");
+
+  const inputArgs = [
+    `-f lavfi -i "color=color=black@0.0:s=${outW}x${outH}:d=1,format=rgba"`,
+    ...layers.map((layer) => `-i "${layer.path}"`),
+  ].join(" ");
+
+  const filters: string[] = [];
+  let lastVideo = "[0:v]";
+
+  layers.forEach((layer, index) => {
+    const tagIn = `cmp_in_${index}`;
+    const tagOut = `cmp_out_${index}`;
+    filters.push(
+      `[${index + 1}:v]scale=${layer.width ?? `iw*${layer.scale}`}:${layer.height ?? "-2"},` +
+      `format=rgba,colorchannelmixer=aa=${layer.opacity}[${tagIn}]`
+    );
+    filters.push(
+      `${lastVideo}[${tagIn}]overlay=x='${layer.x}':y='${layer.y}':format=auto[${tagOut}]`
+    );
+    lastVideo = `[${tagOut}]`;
+  });
+
+  filters.push(`${lastVideo}format=rgba[cmp_vout]`);
+
+  const cmd = [
+    "ffmpeg -y",
+    inputArgs,
+    `-filter_complex "${filters.join(";")}"`,
+    `-map "[cmp_vout]"`,
+    `-frames:v 1`,
+    `-c:v png`,
+    `"${outPath}"`,
+  ].join(" ");
+
+  await execAsync(cmd, { maxBuffer: 100 * 1024 * 1024 });
+}
+
 function escapeDrawtext(s: string): string {
   return s
     .replace(/\\/g, "\\\\")
@@ -126,11 +180,12 @@ async function composeScene(
 
   // Download visible overlay layers
   const visibleOverlays = (scene.overlayLayers || []).filter(l => l.visible !== false && l.url);
+  const overlayPathById = new Map<string, string>();
   for (const ov of visibleOverlays) {
     const ext = ov.kind === "video" ? ".mp4" : ".png";
     const p = path.join(workDir, `overlay_${sceneIdx}_${ov.id}${ext}`);
     await downloadFile(ov.url, p);
-    inputs.push(p);
+    overlayPathById.set(ov.id, p);
   }
 
   // Download background image/video if needed
@@ -249,8 +304,87 @@ async function composeScene(
       ]
     : defaultLayerOrder;
 
+  const renderOverlays: SceneInput["overlayLayers"] = [];
+  const resolvedLayerOrder: string[] = [];
+  const staticGroupTimeKey = (ov: NonNullable<SceneInput["overlayLayers"]>[number]) => {
+    const hasTimeRange = typeof ov.startTime === "number" && typeof ov.endTime === "number";
+    return hasTimeRange
+      ? `${ov.startTime!.toFixed(3)}:${ov.endTime!.toFixed(3)}`
+      : `scene:${dur.toFixed(3)}`;
+  };
+  const isStaticImageOverlay = (ov: NonNullable<SceneInput["overlayLayers"]>[number]) =>
+    ov.kind !== "video" && (ov.animation || "none") === "none";
+
+  for (let orderIndex = 0; orderIndex < effectiveLayerOrder.length; orderIndex += 1) {
+    const layerKey = effectiveLayerOrder[orderIndex];
+    if (!layerKey.startsWith("overlay:")) {
+      resolvedLayerOrder.push(layerKey);
+      continue;
+    }
+
+    const overlayId = layerKey.slice("overlay:".length);
+    const overlay = visibleOverlays.find((ov) => ov.id === overlayId);
+    if (!overlay) continue;
+
+    if (isStaticImageOverlay(overlay)) {
+      const group = [overlay];
+      const timeKey = staticGroupTimeKey(overlay);
+      while (orderIndex + 1 < effectiveLayerOrder.length) {
+        const nextKey = effectiveLayerOrder[orderIndex + 1];
+        if (!nextKey.startsWith("overlay:")) break;
+        const nextId = nextKey.slice("overlay:".length);
+        const nextOverlay = visibleOverlays.find((ov) => ov.id === nextId);
+        if (!nextOverlay || !isStaticImageOverlay(nextOverlay)) break;
+        if (staticGroupTimeKey(nextOverlay) !== timeKey) break;
+        group.push(nextOverlay);
+        orderIndex += 1;
+      }
+
+      if (group.length > 1) {
+        const compositeId = `overlay-group-${sceneIdx}-${renderOverlays.length}`;
+        const compositePath = path.join(workDir, `${compositeId}.png`);
+        await renderStaticOverlayComposite(
+          group.map((ov) => ({
+            path: overlayPathById.get(ov.id)!,
+            x: Math.round((ov.x ?? 0) * scaleX),
+            y: Math.round((ov.y ?? 0) * scaleY),
+            width: typeof ov.width === "number" ? Math.max(2, Math.round(ov.width * scaleX)) : null,
+            height: typeof ov.height === "number" ? Math.max(2, Math.round(ov.height * scaleY)) : null,
+            scale: ov.scale ?? 1,
+            opacity: ((ov.opacity ?? 100) / 100).toFixed(2),
+          })),
+          compositePath,
+          outW,
+          outH,
+        );
+        renderOverlays.push({
+          id: compositeId,
+          kind: "image",
+          url: compositePath,
+          x: 0,
+          y: 0,
+          width: refW,
+          height: refH,
+          scale: 1,
+          opacity: 100,
+          visible: true,
+          startTime: group[0].startTime,
+          endTime: group[0].endTime,
+          animation: "none",
+        });
+        inputs.push(compositePath);
+        resolvedLayerOrder.push(`overlay:${compositeId}`);
+        continue;
+      }
+    }
+
+    renderOverlays.push(overlay);
+    inputs.push(overlayPathById.get(overlay.id)!);
+    resolvedLayerOrder.push(layerKey);
+  }
+
   const overlayByKey = new Map(
-    visibleOverlays.map((ov, i) => [
+    renderOverlays.map((ov, i) => [
       `overlay:${ov.id}`,
       { layer: ov, index: i, inputIdx: overlayInputStartIdx + i },
     ])
@@ -258,7 +392,7 @@ async function composeScene(
   const textByKey = new Map(visibleText.map((tl, i) => [`text:${tl.id}`, { layer: tl, index: i }]));
   const shapeByKey = new Map(visibleShapes.map((sl, i) => [`shape:${sl.id}`, { layer: sl, index: i }]));
 
-  for (const layerKey of effectiveLayerOrder) {
+  for (const layerKey of resolvedLayerOrder) {
     const overlayEntry = overlayByKey.get(layerKey);
     if (overlayEntry) {
       const { layer: ov, index: i, inputIdx: ovIdx } = overlayEntry;
