@@ -441,6 +441,7 @@ async function composeScene(
     `"${outPath}"`,
   ].join(" ");
 
+  console.info(`[composeScene ${sceneIdx}] dur=${dur}s overlays=${visibleOverlays.length} cmd:\n${cmd}`);
   await execAsync(cmd, { maxBuffer: 100 * 1024 * 1024 });
 }
 
