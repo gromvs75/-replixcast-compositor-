@@ -633,3 +633,62 @@ export function cleanupWorkDir(videoPath: string): void {
   const workDir = path.dirname(videoPath);
   fs.rmSync(workDir, { recursive: true, force: true });
 }
+
+// ─── Scene boundary detection via audio silence ───────────────────────────────
+
+/**
+ * Downloads the HeyGen video and runs ffmpeg silencedetect to find audio gaps
+ * between scenes. Returns N-1 boundary timestamps (seconds) for N scenes.
+ * Picks the largest silence gaps as scene cut points.
+ */
+export async function detectSceneBoundaries(videoUrl: string, sceneCount: number): Promise<number[]> {
+  if (sceneCount <= 1) return [];
+
+  const workDir = tmpDir();
+  const videoPath = path.join(workDir, "probe.mp4");
+
+  try {
+    await downloadFile(videoUrl, videoPath);
+
+    // ffmpeg silencedetect writes results to stderr
+    const cmd = `ffmpeg -i "${videoPath}" -af "silencedetect=n=-40dB:d=0.1" -f null - 2>&1`;
+    let output = "";
+    try {
+      const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 });
+      output = result.stdout + result.stderr;
+    } catch (e: any) {
+      // ffmpeg exits non-zero when piping to null on some versions — still capture output
+      output = (e.stdout ?? "") + (e.stderr ?? "");
+    }
+
+    const startMatches = [...output.matchAll(/silence_start: ([\d.]+)/g)];
+    const endMatches = [...output.matchAll(/silence_end: ([\d.]+)/g)];
+
+    const gaps: Array<{ start: number; end: number; duration: number }> = [];
+    for (let i = 0; i < Math.min(startMatches.length, endMatches.length); i++) {
+      const start = parseFloat(startMatches[i]![1]!);
+      const end = parseFloat(endMatches[i]![1]!);
+      if (end > start) {
+        gaps.push({ start, end, duration: end - start });
+      }
+    }
+
+    console.info(`[detectSceneBoundaries] sceneCount=${sceneCount} gaps found:`, gaps);
+
+    if (gaps.length === 0) return [];
+
+    // Pick the N-1 largest silence gaps, sorted by their position in the video
+    const needed = sceneCount - 1;
+    const selected = [...gaps]
+      .sort((a, b) => b.duration - a.duration)
+      .slice(0, needed)
+      .sort((a, b) => a.start - b.start);
+
+    // Return midpoint of each selected gap as the scene boundary
+    const boundaries = selected.map((g) => (g.start + g.end) / 2);
+    console.info(`[detectSceneBoundaries] boundaries:`, boundaries);
+    return boundaries;
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+}

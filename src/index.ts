@@ -1,5 +1,5 @@
 import express from "express";
-import { compose, cleanupWorkDir } from "./compositor";
+import { compose, cleanupWorkDir, detectSceneBoundaries } from "./compositor";
 import { uploadToFirebase } from "./firebase";
 import type { ComposeRequest, ComposeResponse } from "./types";
 
@@ -67,6 +67,31 @@ app.post("/compose", async (req, res) => {
     } satisfies ComposeResponse);
   } finally {
     if (videoPath) cleanupWorkDir(videoPath);
+  }
+});
+
+// ─── Detect scene boundaries ──────────────────────────────────────────────────
+
+app.post("/detect-scene-boundaries", async (req, res) => {
+  const { videoUrl, sceneCount, secret } = req.body ?? {};
+
+  if (SECRET && secret !== SECRET) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return;
+  }
+
+  if (!videoUrl || typeof sceneCount !== "number" || sceneCount < 2) {
+    res.status(400).json({ ok: false, error: "videoUrl and sceneCount >= 2 are required" });
+    return;
+  }
+
+  try {
+    const boundaries = await detectSceneBoundaries(String(videoUrl), sceneCount);
+    console.log(`[detect-scene-boundaries] sceneCount=${sceneCount} boundaries=${JSON.stringify(boundaries)}`);
+    res.json({ ok: true, boundaries });
+  } catch (err: any) {
+    console.error("[detect-scene-boundaries] error:", err?.message);
+    res.status(500).json({ ok: false, error: err?.message ?? "Detection failed" });
   }
 });
 
