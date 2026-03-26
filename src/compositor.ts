@@ -122,7 +122,7 @@ async function composeScene(
 
   // Build inputs list
   const inputs: string[] = [avatarPath];
-  const overlayPaths: string[] = [];
+  const dur = scene.durationSeconds;
 
   // Download visible overlay layers
   const visibleOverlays = (scene.overlayLayers || []).filter(l => l.visible !== false && l.url);
@@ -131,7 +131,6 @@ async function composeScene(
     const p = path.join(workDir, `overlay_${sceneIdx}_${ov.id}${ext}`);
     await downloadFile(ov.url, p);
     inputs.push(p);
-    overlayPaths.push(p);
   }
 
   // Download background image/video if needed
@@ -147,13 +146,11 @@ async function composeScene(
     inputs.unshift(bgImagePath);
   }
 
-  const dur = scene.durationSeconds;
-
   // ── Build filter_complex ───────────────────────────────────────────────────
 
-  let inputIdx = 0;
   const filters: string[] = [];
   let lastVideo = "";
+  let inputIdx = 0;
 
   // ── Background ────────────────────────────────────────────────────────────
   const bgOpacity = ((scene.backgroundOpacity ?? 100) / 100).toFixed(2);
@@ -162,7 +159,6 @@ async function composeScene(
   const bpScale = scene.backgroundParams?.scale ?? 1;
 
   if (scene.backgroundVisible === false) {
-    // No background — black canvas
     filters.push(`color=c=black:s=${outW}x${outH}:d=${dur}[bg]`);
     lastVideo = "[bg]";
   } else if (scene.backgroundType === "color" && scene.backgroundValue) {
@@ -175,13 +171,11 @@ async function composeScene(
       const c1 = hexToRgb(grad.color1);
       const c2 = hexToRgb(grad.color2);
       const angleRad = (grad.angle * Math.PI) / 180;
-      // geq gradient filter
       const rExpr = `${c1.r}+(${c2.r - c1.r})*((X*${Math.sin(angleRad).toFixed(4)}+Y*${Math.cos(angleRad).toFixed(4)})/(W*${Math.sin(angleRad).toFixed(4)}+H*${Math.cos(angleRad).toFixed(4)}))`;
       const gExpr = `${c1.g}+(${c2.g - c1.g})*((X*${Math.sin(angleRad).toFixed(4)}+Y*${Math.cos(angleRad).toFixed(4)})/(W*${Math.sin(angleRad).toFixed(4)}+H*${Math.cos(angleRad).toFixed(4)}))`;
       const bExpr = `${c1.b}+(${c2.b - c1.b})*((X*${Math.sin(angleRad).toFixed(4)}+Y*${Math.cos(angleRad).toFixed(4)})/(W*${Math.sin(angleRad).toFixed(4)}+H*${Math.cos(angleRad).toFixed(4)}))`;
       filters.push(`color=s=${outW}x${outH}:d=${dur}[bgbase];[bgbase]geq=r='${rExpr}':g='${gExpr}':b='${bExpr}'[bg]`);
     } else {
-      // Fallback: extract first color
       const fallback = extractFirstColor(scene.backgroundValue).replace("#", "0x");
       filters.push(`color=c=${fallback}:s=${outW}x${outH}:d=${dur}[bg]`);
     }
@@ -217,14 +211,16 @@ async function composeScene(
   const ay = (ap.y ?? 0) * scaleY;
   const aScale = ap.scale ?? 1;
 
+  const avatarSeek = typeof scene.avatarStartTimeSeconds === "number" && scene.avatarStartTimeSeconds > 0
+    ? scene.avatarStartTimeSeconds
+    : 0;
+
   if (scene.avatarVisible !== false) {
-    // Scale avatar to fill height, then apply user scale
     const avatarH = Math.round(outH * aScale);
-    filters.push(
-      `[${avatarIdx}:v]scale=-2:${avatarH},` +
-      `setpts=PTS-STARTPTS,trim=duration=${dur}[av_scaled]`
-    );
-    // Position: centered by default (x=0,y=0 means center), offset by ax/ay
+    const trimExpr = avatarSeek > 0
+      ? `trim=start=${avatarSeek.toFixed(3)}:duration=${dur},setpts=PTS-STARTPTS,`
+      : `setpts=PTS-STARTPTS,trim=duration=${dur},`;
+    filters.push(`[${avatarIdx}:v]${trimExpr}scale=-2:${avatarH}[av_scaled]`);
     filters.push(
       `${lastVideo}[av_scaled]overlay=` +
       `x=(main_w-overlay_w)/2+${Math.round(ax)}:` +
@@ -418,6 +414,17 @@ async function composeScene(
     filters.push(`${lastVideo}copy[vout]`);
   }
 
+  // ── Audio: trim to scene window if seeking ────────────────────────────────
+  let audioMap: string;
+  if (avatarSeek > 0) {
+    filters.push(
+      `[${avatarIdx}:a]atrim=start=${avatarSeek.toFixed(3)}:duration=${dur},asetpts=PTS-STARTPTS[av_audio]`
+    );
+    audioMap = `-map "[av_audio]"`;
+  } else {
+    audioMap = `-map ${avatarIdx}:a?`;
+  }
+
   // ── Assemble ffmpeg command ───────────────────────────────────────────────
   const inputArgs = inputs.map(p => `-i "${p}"`).join(" ");
   const filterStr = filters.join(";");
@@ -427,7 +434,7 @@ async function composeScene(
     inputArgs,
     `-filter_complex "${filterStr}"`,
     `-map "[vout]"`,
-    `-map ${avatarIdx}:a?`,   // avatar TTS audio if present
+    audioMap,
     `-c:v libx264 -preset fast -crf 22 -pix_fmt yuv420p`,
     `-c:a aac -b:a 128k -ar 44100`,
     `-t ${dur}`,
