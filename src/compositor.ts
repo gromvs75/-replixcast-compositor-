@@ -298,10 +298,13 @@ async function composeScene(
           `${fadeExpr},setpts=PTS-STARTPTS+${overlayStart.toFixed(3)}/TB[${tagIn}]`
         );
       } else {
-        // Static image (no animation): simpler eof_action=repeat avoids chaining many loop filters
+        // Static image: keep a one-frame loop trimmed to the intended duration.
+        // This is more stable than relying on eof_action=repeat across many PNG inputs.
         filters.push(
           `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
-          `format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`
+          `format=rgba,colorchannelmixer=aa=${ovOpacity},` +
+          `loop=loop=-1:size=1:start=0,trim=duration=${overlayDuration.toFixed(3)},` +
+          `setpts=PTS-STARTPTS+${overlayStart.toFixed(3)}/TB[${tagIn}]`
         );
       }
       const animProgress =
@@ -323,12 +326,8 @@ async function composeScene(
           ovYExpr = `${ovY}-${slideOffsetY}*(1-${animProgress})`;
         }
       }
-      // Animated overlays use eof_action=pass (timed via loop+trim+setpts above)
-      // Static overlays use eof_action=repeat so a single PNG frame covers the full duration,
-      // with enable= expression restricting visibility to the desired time window
-      const overlayExpr = hasOverlayAnimation
-        ? `overlay=x='${ovXExpr}':y='${ovYExpr}':eof_action=pass`
-        : `overlay=x='${ovXExpr}':y='${ovYExpr}':eof_action=repeat${enableExpr}`;
+      // All image overlays are explicitly timed upstream, so pass through on EOF.
+      const overlayExpr = `overlay=x='${ovXExpr}':y='${ovYExpr}':eof_action=pass${enableExpr}`;
       filters.push(`${lastVideo}[${tagIn}]${overlayExpr}[${tagOut}]`);
       lastVideo = `[${tagOut}]`;
       continue;
