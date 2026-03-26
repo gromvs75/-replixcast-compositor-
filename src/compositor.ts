@@ -435,8 +435,8 @@ async function composeScene(
     `-filter_complex "${filterStr}"`,
     `-map "[vout]"`,
     audioMap,
-    `-c:v libx264 -preset fast -crf 22 -pix_fmt yuv420p`,
-    `-c:a aac -b:a 128k -ar 44100`,
+    `-c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p`,
+    `-c:a aac -b:a 192k -ar 44100`,
     `-t ${dur}`,
     `"${outPath}"`,
   ].join(" ");
@@ -567,8 +567,8 @@ async function applyTransitions(
     `-i "${inputVideo}"`,
     `-filter_complex "${filters.join(";")}"`,
     `-map "[vout]" -map "[aout]"`,
-    `-c:v libx264 -preset fast -crf 22 -pix_fmt yuv420p`,
-    `-c:a aac -b:a 128k -ar 44100`,
+    `-c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p`,
+    `-c:a aac -b:a 192k -ar 44100`,
     `"${outPath}"`,
   ].join(" ");
 
