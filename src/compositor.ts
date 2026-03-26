@@ -285,26 +285,24 @@ async function composeScene(
           `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},setpts=PTS-STARTPTS,trim=duration=${dur},` +
           `loop=loop=-1:size=32767:start=0[${tagIn}]`
         );
+      } else if (hasOverlayAnimation) {
+        // Animated image: use loop+trim+setpts so fade-in timing works correctly
+        const animDuration = Math.min(0.6, overlayDuration);
+        const fadeExpr = animDuration > 0
+          ? `,fade=t=in:st=0:d=${animDuration.toFixed(3)}:alpha=1`
+          : "";
+        filters.push(
+          `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
+          `format=rgba,colorchannelmixer=aa=${ovOpacity},` +
+          `loop=loop=-1:size=1:start=0,trim=duration=${overlayDuration.toFixed(3)}` +
+          `${fadeExpr},setpts=PTS-STARTPTS+${overlayStart.toFixed(3)}/TB[${tagIn}]`
+        );
       } else {
-        const shouldUseTimedImageStream = hasTimeRange || hasOverlayAnimation;
-        if (shouldUseTimedImageStream) {
-          const animDuration = Math.min(0.6, overlayDuration);
-          const fadeExpr =
-            hasOverlayAnimation && animDuration > 0
-              ? `,fade=t=in:st=0:d=${animDuration.toFixed(3)}:alpha=1`
-              : "";
-          filters.push(
-            `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
-            `format=rgba,colorchannelmixer=aa=${ovOpacity},` +
-            `loop=loop=-1:size=1:start=0,trim=duration=${overlayDuration.toFixed(3)}` +
-            `${fadeExpr},setpts=PTS-STARTPTS+${overlayStart.toFixed(3)}/TB[${tagIn}]`
-          );
-        } else {
-          filters.push(
-            `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
-            `format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`
-          );
-        }
+        // Static image (no animation): simpler eof_action=repeat avoids chaining many loop filters
+        filters.push(
+          `[${ovIdx}:v]scale=${ovWidth ?? `iw*${ovScale}`}:${ovHeight ?? "-2"},` +
+          `format=rgba,colorchannelmixer=aa=${ovOpacity}[${tagIn}]`
+        );
       }
       const animProgress =
         hasOverlayAnimation && overlayDuration > 0
@@ -325,9 +323,12 @@ async function composeScene(
           ovYExpr = `${ovY}-${slideOffsetY}*(1-${animProgress})`;
         }
       }
-      const overlayExpr = ov.kind === "image" && (hasTimeRange || hasOverlayAnimation)
+      // Animated overlays use eof_action=pass (timed via loop+trim+setpts above)
+      // Static overlays use eof_action=repeat so a single PNG frame covers the full duration,
+      // with enable= expression restricting visibility to the desired time window
+      const overlayExpr = hasOverlayAnimation
         ? `overlay=x='${ovXExpr}':y='${ovYExpr}':eof_action=pass`
-        : `overlay=x='${ovXExpr}':y='${ovYExpr}'${enableExpr}`;
+        : `overlay=x='${ovXExpr}':y='${ovYExpr}':eof_action=repeat${enableExpr}`;
       filters.push(`${lastVideo}[${tagIn}]${overlayExpr}[${tagOut}]`);
       lastVideo = `[${tagOut}]`;
       continue;
