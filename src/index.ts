@@ -49,7 +49,9 @@ app.post("/compose", async (req, res) => {
 
     // Upload to Firebase Storage
     const destPath = `compositor/${body.projectId}/${Date.now()}.mp4`;
+    const uploadT0 = Date.now();
     const videoUrl = await uploadToFirebase(videoPath, destPath);
+    console.log(`[compose] uploadMs=${Date.now() - uploadT0}`);
 
     const durationMs = Date.now() - t0;
     console.log(`[compose] done in ${durationMs}ms → ${videoUrl}`);

@@ -167,6 +167,7 @@ async function composeScene(
   refH: number,
   sceneIdx: number,
 ): Promise<void> {
+  const t0 = Date.now();
   const scaleX = outW / refW;
   const scaleY = outH / refH;
 
@@ -583,6 +584,7 @@ async function composeScene(
 
   console.info(`[composeScene ${sceneIdx}] dur=${dur}s overlays=${visibleOverlays.length} cmd:\n${cmd}`);
   await execAsync(cmd, { maxBuffer: 100 * 1024 * 1024 });
+  console.info(`[composeScene ${sceneIdx}] renderMs=${Date.now() - t0}`);
 }
 
 // ─── Concatenate scenes ───────────────────────────────────────────────────────
@@ -615,6 +617,7 @@ async function mixMusic(
   fadeOut: boolean,
   totalDur: number,
 ): Promise<void> {
+  const t0 = Date.now();
   const musicPath = path.join(workDir, "music.mp3");
   await downloadFile(musicUrl, musicPath);
 
@@ -636,6 +639,7 @@ async function mixMusic(
   ].join(" ");
 
   await execAsync(cmd, { maxBuffer: 100 * 1024 * 1024 });
+  console.info(`[mixMusic] totalDur=${totalDur}s mixMs=${Date.now() - t0}`);
 }
 
 // ─── Apply video transitions (xfade) ─────────────────────────────────────────
@@ -719,6 +723,7 @@ async function applyTransitions(
 
 export async function compose(req: ComposeRequest): Promise<string> {
   const workDir = tmpDir();
+  const t0 = Date.now();
   try {
     const res = RESOLUTIONS[req.resolution ?? "1080p"];
     const refW = req.referenceWidth ?? DEFAULT_REF_W;
@@ -732,17 +737,22 @@ export async function compose(req: ComposeRequest): Promise<string> {
       await composeScene(req.scenes[i], scPath, workDir, res.w, res.h, refW, refH, i);
       scenePaths.push(scPath);
     }
+    console.info(`[composeCore] scenesMs=${Date.now() - t0}`);
 
     // Concatenate
     const concatPath = path.join(workDir, "concat.mp4");
+    const concatT0 = Date.now();
     await concatenateScenes(scenePaths, concatPath, workDir);
+    console.info(`[composeCore] concatMs=${Date.now() - concatT0}`);
 
     // Apply scene transitions (xfade) if any
     let transPath = concatPath;
     const transitions = (req.videoTransitions ?? []).filter(t => t.time > 0 && t.duration > 0);
     if (transitions.length > 0) {
       transPath = path.join(workDir, "with_transitions.mp4");
+      const transitionT0 = Date.now();
       await applyTransitions(concatPath, transitions, transPath);
+      console.info(`[composeCore] transitionsMs=${Date.now() - transitionT0}`);
     }
 
     // Add music if provided
@@ -759,6 +769,8 @@ export async function compose(req: ComposeRequest): Promise<string> {
         totalDur,
       );
     }
+
+    console.info(`[composeCore] totalMs=${Date.now() - t0}`);
 
     return finalPath;
   } catch (err) {
